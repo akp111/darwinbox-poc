@@ -11,7 +11,11 @@ A proof-of-concept expense management system with hierarchical approval workflow
 
 ## 📋 Features
 
-- ✅ Hierarchical organizational structure (7-level hierarchy)
+- ✅ Hierarchical organizational ## 🗄️ Database Schema
+
+### Raw PostgreSQL Schema
+
+```sqlture (7-level hierarchy)
 - ✅ Policy-based expense categorization with amount thresholds
 - ✅ Multi-step approval workflows
 - ✅ Role-based authorization
@@ -346,12 +350,283 @@ python scripts/populate_data.py
 }
 ```
 
-## 📄 License
+## �️ Database Schema
 
-This project is a proof-of-concept for educational purposes.
+### Raw PostgreSQL Schema
+
+```sql
+-- Companies table
+CREATE TABLE companies (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(100) NOT NULL
+);
+
+-- Teams table
+CREATE TABLE teams (
+    id SERIAL PRIMARY KEY,
+    company_id INTEGER NOT NULL REFERENCES companies(id),
+    name VARCHAR(100) NOT NULL,
+    is_company_wide BOOLEAN DEFAULT false,
+    UNIQUE (company_id, name)
+);
+CREATE INDEX ix_teams_company_id ON teams(company_id);
+
+-- Hierarchy levels table
+CREATE TABLE hierarchy_levels (
+    id SERIAL PRIMARY KEY,
+    company_id INTEGER NOT NULL REFERENCES companies(id),
+    team_id INTEGER NOT NULL REFERENCES teams(id),
+    level_number INTEGER NOT NULL,
+    level_name VARCHAR(100) NOT NULL,
+    UNIQUE (company_id, team_id, level_number)
+);
+CREATE INDEX ix_hierarchy_levels_company_level ON hierarchy_levels(company_id, level_number);
+CREATE INDEX ix_hierarchy_levels_team_level ON hierarchy_levels(team_id, level_number);
+
+-- Users table
+CREATE TABLE users (
+    id SERIAL PRIMARY KEY,
+    company_id INTEGER NOT NULL REFERENCES companies(id),
+    team_id INTEGER NOT NULL REFERENCES teams(id),
+    email VARCHAR(100) NOT NULL,
+    name VARCHAR(255) NOT NULL,
+    hierarchy_level_id INTEGER NOT NULL REFERENCES hierarchy_levels(id),
+    active BOOLEAN DEFAULT true,
+    UNIQUE (company_id, email)
+);
+CREATE INDEX ix_users_company_team ON users(company_id, team_id);
+CREATE INDEX ix_users_hierarchy_level ON users(hierarchy_level_id);
+CREATE INDEX ix_users_team_hierarchy ON users(team_id, hierarchy_level_id);
+
+-- Policies table
+CREATE TABLE policies (
+    id SERIAL PRIMARY KEY,
+    company_id INTEGER NOT NULL REFERENCES companies(id),
+    category VARCHAR(50) NOT NULL,
+    name VARCHAR(100) NOT NULL,
+    description TEXT,
+    min_amount DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+    max_amount DECIMAL(12,2) NOT NULL DEFAULT 999999999.99,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    active BOOLEAN DEFAULT true,
+    UNIQUE (company_id, category, min_amount),
+    CHECK (min_amount <= max_amount)
+);
+CREATE INDEX ix_policies_company_category ON policies(company_id, category);
+CREATE INDEX ix_policies_amount_range ON policies(company_id, min_amount, max_amount);
+
+-- Approval steps table
+CREATE TABLE approval_steps (
+    id SERIAL PRIMARY KEY,
+    policy_id INTEGER NOT NULL REFERENCES policies(id),
+    step_order INTEGER NOT NULL,
+    required_level INTEGER NOT NULL,
+    team_scope VARCHAR(20) NOT NULL DEFAULT 'submitter',
+    is_required BOOLEAN DEFAULT true,
+    description VARCHAR(255),
+    UNIQUE (policy_id, step_order),
+    CHECK (step_order > 0),
+    CHECK (required_level BETWEEN 1 AND 10)
+);
+CREATE INDEX ix_approval_steps_policy_order ON approval_steps(policy_id, step_order);
+CREATE INDEX ix_approval_steps_level_scope ON approval_steps(required_level, team_scope);
+
+-- Expenses table
+CREATE TABLE expenses (
+    id SERIAL PRIMARY KEY,
+    company_id INTEGER NOT NULL REFERENCES companies(id),
+    user_id INTEGER NOT NULL REFERENCES users(id),
+    policy_id INTEGER NOT NULL REFERENCES policies(id),
+    amount DECIMAL(12,2) NOT NULL,
+    description TEXT,
+    status VARCHAR(20) DEFAULT 'pending',
+    submitted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    completed_at TIMESTAMP NULL
+);
+CREATE INDEX ix_expenses_company_user_submitted ON expenses(company_id, user_id, submitted_at);
+CREATE INDEX ix_expenses_company_status ON expenses(company_id, status);
+
+-- Approvals table
+CREATE TABLE approvals (
+    id SERIAL PRIMARY KEY,
+    expense_id INTEGER NOT NULL REFERENCES expenses(id),
+    step_number INTEGER NOT NULL,
+    approver_id INTEGER NOT NULL REFERENCES users(id),
+    approver_level_id INTEGER NOT NULL REFERENCES hierarchy_levels(id),
+    required BOOLEAN DEFAULT true,
+    status VARCHAR(20) DEFAULT 'pending',
+    approved_at TIMESTAMP NULL,
+    comments TEXT,
+    UNIQUE (expense_id, step_number, approver_id)
+);
+CREATE INDEX ix_approvals_approver_status ON approvals(approver_id, status);
+CREATE INDEX ix_approvals_expense_step ON approvals(expense_id, step_number);
+```
+
+## 🔍 Raw SQL Queries for API Operations
+
+### 1. Create Expense API
+
+**POST /api/expenses**
+
+This endpoint performs the following SQL operations in sequence:
+
+**Step 1: Validate User**
+```sql
+SELECT id, company_id, team_id, hierarchy_level_id 
+FROM users 
+WHERE id = $1 AND active = true;
+```
+
+**Step 2: Validate Policy**
+```sql
+SELECT id, company_id, min_amount, max_amount, name 
+FROM policies 
+WHERE id = $1 AND active = true;
+```
+
+**Step 3: Insert Expense**
+```sql
+INSERT INTO expenses (company_id, user_id, policy_id, amount, description, status, submitted_at)
+VALUES ($1, $2, $3, $4, $5, 'pending', CURRENT_TIMESTAMP)
+RETURNING id;
+```
+
+**Step 4: Get Approval Steps for Policy**
+```sql
+SELECT id, step_order, required_level, team_scope, is_required, description
+FROM approval_steps 
+WHERE policy_id = $1 
+ORDER BY step_order;
+```
+
+**Step 5: Find Approver (Team Scope)**
+```sql
+SELECT u.id, u.name, u.hierarchy_level_id, hl.level_name
+FROM users u
+JOIN hierarchy_levels hl ON u.hierarchy_level_id = hl.id
+WHERE u.company_id = $1 
+  AND u.team_id = $2 
+  AND hl.level_number <= $3 
+  AND u.id != $4 
+  AND u.active = true
+ORDER BY hl.level_number ASC
+LIMIT 1;
+```
+
+**Step 6: Insert Approval Records**
+```sql
+INSERT INTO approvals (expense_id, step_number, approver_id, approver_level_id, required, status)
+VALUES ($1, $2, $3, $4, $5, 'pending');
+```
+
+### 2. Approve Expense API
+
+**POST /api/expenses/approve**
+
+This endpoint performs the following SQL operations in sequence:
+
+**Step 1: Validate Expense**
+```sql
+SELECT id, company_id, status 
+FROM expenses 
+WHERE id = $1;
+```
+
+**Step 2: Validate Approver**
+```sql
+SELECT id, company_id, name 
+FROM users 
+WHERE id = $1 AND active = true;
+```
+
+**Step 3: Find Pending Approval**
+```sql
+SELECT id, step_number, required
+FROM approvals 
+WHERE expense_id = $1 
+  AND approver_id = $2 
+  AND status = 'pending';
+```
+
+**Step 4: Update Approval**
+```sql
+UPDATE approvals 
+SET status = 'approved', 
+    approved_at = CURRENT_TIMESTAMP, 
+    comments = $3
+WHERE id = $1;
+```
+
+**Step 5: Count Pending Required Approvals**
+```sql
+SELECT COUNT(*) 
+FROM approvals 
+WHERE expense_id = $1 
+  AND required = true 
+  AND status = 'pending';
+```
+
+**Step 6: Update Expense Status (if all approved)**
+```sql
+UPDATE expenses 
+SET status = 'approved', 
+    completed_at = CURRENT_TIMESTAMP 
+WHERE id = $1;
+```
+
+### 3. Get Expense Status API
+
+**GET /api/expenses/{id}/status**
+
+This endpoint performs the following SQL operations:
+
+**Step 1: Get Expense Details**
+```sql
+SELECT e.id, e.amount, e.description, e.status, e.submitted_at, e.completed_at,
+       u.name as user_name, p.name as policy_name
+FROM expenses e
+JOIN users u ON e.user_id = u.id
+JOIN policies p ON e.policy_id = p.id
+WHERE e.id = $1;
+```
+
+**Step 2: Get All Approvals**
+```sql
+SELECT a.step_number, a.status, a.approved_at, a.comments, a.required,
+       u.name as approver_name, hl.level_name as approver_level
+FROM approvals a
+JOIN users u ON a.approver_id = u.id
+JOIN hierarchy_levels hl ON a.approver_level_id = hl.id
+WHERE a.expense_id = $1
+ORDER BY a.step_number;
+```
+
+
+
+**Get Policies with Approval Steps:**
+```sql
+SELECT p.id, p.name, p.category, p.min_amount, p.max_amount,
+       ass.step_order, ass.required_level, ass.team_scope, ass.description
+FROM policies p
+LEFT JOIN approval_steps ass ON p.id = ass.policy_id
+WHERE p.company_id = $1 AND p.active = true
+ORDER BY p.id, ass.step_order;
+```
+
+**Get Expense Workflow Status:**
+```sql
+SELECT e.id, e.amount, e.status, e.submitted_at,
+       COUNT(a.id) as total_steps,
+       COUNT(CASE WHEN a.status = 'approved' THEN 1 END) as approved_steps,
+       COUNT(CASE WHEN a.status = 'pending' AND a.required = true THEN 1 END) as pending_required
+FROM expenses e
+LEFT JOIN approvals a ON e.id = a.expense_id
+WHERE e.company_id = $1
+GROUP BY e.id, e.amount, e.status, e.submitted_at
+ORDER BY a.step_number;
+```
 
 ---
-
-**Happy Testing! 🚀**
 
 For detailed API testing examples, see [test.md](test.md)
