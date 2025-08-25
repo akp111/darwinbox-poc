@@ -416,6 +416,7 @@ CREATE INDEX ix_policies_company_category ON policies(company_id, category);
 CREATE INDEX ix_policies_amount_range ON policies(company_id, min_amount, max_amount);
 
 -- Approval steps table
+-- With this, the approval step can incorporate dynamic operations like escalation, escalation time out and so on
 CREATE TABLE approval_steps (
     id SERIAL PRIMARY KEY,
     policy_id INTEGER NOT NULL REFERENCES policies(id),
