@@ -45,10 +45,10 @@ pip install -r requirements.txt
 
 ```bash
 # Start PostgreSQL container
-docker-compose up -d
+docker compose up -d
 
 # Verify database is running
-docker-compose ps
+docker compose ps
 ```
 
 ### 3. Start Application
