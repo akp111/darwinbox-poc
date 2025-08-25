@@ -346,16 +346,6 @@ python scripts/populate_data.py
 }
 ```
 
-## 🎯 Next Steps
-
-- [ ] Add user authentication (JWT/OAuth)
-- [ ] Implement expense rejection workflow
-- [ ] Add email notifications for approvals
-- [ ] Create dashboard UI
-- [ ] Add expense reporting and analytics
-- [ ] Implement file upload for receipts
-- [ ] Add audit logging
-
 ## 📄 License
 
 This project is a proof-of-concept for educational purposes.
