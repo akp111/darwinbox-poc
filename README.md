@@ -603,29 +603,203 @@ WHERE a.expense_id = $1
 ORDER BY a.step_number;
 ```
 
+## 🚀 Load Testing
 
+### Overview
 
-**Get Policies with Approval Steps:**
-```sql
-SELECT p.id, p.name, p.category, p.min_amount, p.max_amount,
-       ass.step_order, ass.required_level, ass.team_scope, ass.description
-FROM policies p
-LEFT JOIN approval_steps ass ON p.id = ass.policy_id
-WHERE p.company_id = $1 AND p.active = true
-ORDER BY p.id, ass.step_order;
+The project includes a comprehensive load testing script to evaluate API performance under various load conditions. The load tester simulates realistic user behavior across all three endpoints.
+
+### Quick Start
+
+**Option 1: Interactive Script**
+```bash
+# Run the interactive load test setup
+./run_load_test.sh
 ```
 
-**Get Expense Workflow Status:**
-```sql
-SELECT e.id, e.amount, e.status, e.submitted_at,
-       COUNT(a.id) as total_steps,
-       COUNT(CASE WHEN a.status = 'approved' THEN 1 END) as approved_steps,
-       COUNT(CASE WHEN a.status = 'pending' AND a.required = true THEN 1 END) as pending_required
-FROM expenses e
-LEFT JOIN approvals a ON e.id = a.expense_id
-WHERE e.company_id = $1
-GROUP BY e.id, e.amount, e.status, e.submitted_at
-ORDER BY a.step_number;
+**Option 2: Direct Execution**
+```bash
+# Install dependencies
+pip install -r load_test_requirements.txt
+
+# Run load test with default settings (10 users, 60s)
+python3 load_test.py
+```
+
+### Test Scenarios
+
+#### 1. Light Load Test
+```bash
+python3 load_test.py --users 5 --duration 30 --delay 0.2
+```
+- **Purpose**: Basic functionality validation
+- **Users**: 5 concurrent users
+- **Duration**: 30 seconds
+- **Use Case**: Development testing, CI/CD pipelines
+
+#### 2. Medium Load Test  
+```bash
+python3 load_test.py --users 10 --duration 60 --delay 0.1
+```
+- **Purpose**: Standard performance baseline
+- **Users**: 10 concurrent users  
+- **Duration**: 60 seconds
+- **Use Case**: Regular performance monitoring
+
+#### 3. Heavy Load Test
+```bash
+python3 load_test.py --users 25 --duration 120 --delay 0.05
+```
+- **Purpose**: Stress testing under sustained load
+- **Users**: 25 concurrent users
+- **Duration**: 2 minutes
+- **Use Case**: Capacity planning, bottleneck identification
+
+#### 4. Spike Test
+```bash
+python3 load_test.py --users 50 --duration 30 --delay 0.02
+```
+- **Purpose**: Peak traffic simulation
+- **Users**: 50 concurrent users
+- **Duration**: 30 seconds
+- **Use Case**: Black Friday scenarios, viral traffic spikes
+
+### Load Test Features
+
+#### **Realistic User Simulation**
+- **Mixed Workload**: 50% create, 30% approve, 20% status checks
+- **Intelligent Data**: Uses sample data matching your database
+- **Workflow Simulation**: Creates expenses, then approves them
+- **Ramp-up**: Gradual user increase to avoid thundering herd
+
+#### **Comprehensive Metrics**
+- **Response Time Statistics**: Mean, median, 95th percentile, min/max
+- **Success Rate Analysis**: Request success/failure breakdown
+- **Per-Endpoint Metrics**: Individual endpoint performance
+- **Error Analysis**: Detailed error categorization
+- **Performance Thresholds**: Automated performance assessment
+
+#### **Command Line Options**
+```bash
+python3 load_test.py --help
+
+Options:
+  --url URL         Base URL of the API (default: http://127.0.0.1:4000)
+  --users USERS     Number of concurrent users (default: 10)
+  --duration DURATION  Test duration in seconds (default: 60)
+  --rampup RAMPUP   Ramp-up time in seconds (default: 5)
+  --delay DELAY     Delay between requests per user (default: 0.1)
+```
+
+### Sample Test Output
+
+```
+🚀 Starting Load Test for DarwinBox POC
+📊 Configuration:
+   - Base URL: http://127.0.0.1:4000
+   - Concurrent Users: 10
+   - Test Duration: 60s
+   - Ramp-up Time: 5s
+   - Request Delay: 0.1s
+
+✅ API server connectivity confirmed
+🏃 Starting load test simulation...
+
+✅ Load test completed in 62.15s
+
+============================================================
+📊 LOAD TEST RESULTS REPORT
+============================================================
+
+📈 Overall Statistics:
+   Total Requests: 2847
+   Successful: 2834 (99.54%)
+   Failed: 13
+   Average Response Time: 0.156s
+   Median Response Time: 0.134s
+   95th Percentile: 0.298s
+   Max Response Time: 1.234s
+   Min Response Time: 0.045s
+
+🎯 Per-Endpoint Statistics:
+   POST expenses:
+     Requests: 1424 | Success: 1420 (99.72%) | Avg Time: 0.187s
+   POST approve:
+     Requests: 853 | Success: 851 (99.77%) | Avg Time: 0.143s
+   GET status:
+     Requests: 570 | Success: 563 (98.77%) | Avg Time: 0.098s
+
+💡 Recommendations:
+   ✅ Performance looks good!
+============================================================
+```
+
+### Performance Benchmarks
+
+#### **Expected Performance Targets**
+- **Success Rate**: > 95%
+- **Average Response Time**: < 500ms
+- **95th Percentile**: < 1000ms
+- **Concurrent Users**: 10-25 users sustained
+
+#### **Performance Indicators**
+- **Green**: Success rate > 95%, avg response < 500ms
+- **Yellow**: Success rate 90-95%, avg response 500-1000ms
+- **Red**: Success rate < 90%, avg response > 1000ms
+
+### Load Testing Best Practices
+
+#### **Before Running Tests**
+1. **Start Services**: Ensure API and database are running
+2. **Populate Data**: Run `python scripts/populate_data.py`
+3. **Baseline**: Run light load test first
+4. **Monitor Resources**: Watch CPU, memory, database connections
+
+#### **Interpreting Results**
+- **Response Time Spikes**: Check database query performance
+- **High Error Rates**: Investigate connection limits, database locks
+- **Memory Issues**: Monitor application memory usage
+- **Database Performance**: Check PostgreSQL logs and query plans
+
+#### **Scaling Considerations**
+- **Database Connections**: Tune PostgreSQL `max_connections`
+- **Application Threads**: Adjust FastAPI worker processes
+- **Caching**: Consider Redis for session management
+- **Load Balancing**: Use nginx for multiple app instances
+
+![alt text](image.png)
+
+Note: Failed cases are because the script was trying approve expenses that did not exist.
+
+### Troubleshooting Load Tests
+
+#### **Common Issues**
+
+**Connection Refused**
+```bash
+# Check if API server is running
+curl http://127.0.0.1:4000/
+
+# Start the server if needed
+python -m src.main
+```
+
+**Database Connection Errors**
+```bash
+# Check database status
+docker compose ps
+
+# Restart database if needed
+docker compose restart postgres
+```
+
+**High Error Rates**
+```bash
+# Check server logs for errors
+python -m src.main
+
+# Monitor database connections
+docker exec -it postgres psql -U darwinbox_user -d darwinbox_db -c "SELECT * FROM pg_stat_activity;"
 ```
 
 ---
